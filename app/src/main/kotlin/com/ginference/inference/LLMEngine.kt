@@ -43,7 +43,6 @@ class LLMEngine(private val context: Context) {
                     "TFL3" -> ModelFormat.TFLITE
                     "RTLM" -> ModelFormat.LITERT
                     else -> {
-                        // Try to detect by extension
                         when {
                             file.name.endsWith(".task") -> ModelFormat.TFLITE
                             file.name.endsWith(".litertlm") -> ModelFormat.LITERT
@@ -119,16 +118,13 @@ class LLMEngine(private val context: Context) {
             val fileSizeMB = modelFile.length() / 1024 / 1024
             Log.d(TAG, "File size: $fileSizeMB MB")
 
-            // Validate file extension
             if (!actualPath.endsWith(".task") && !actualPath.endsWith(".litertlm")) {
                 throw IllegalArgumentException("Invalid model format. Must be .task or .litertlm file")
             }
 
-            // Detect model format
             modelFormat = detectModelFormat(modelFile)
             Log.d(TAG, "Detected model format: $modelFormat")
 
-            // Check available memory
             val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
             val memInfo = android.app.ActivityManager.MemoryInfo()
             activityManager.getMemoryInfo(memInfo)
@@ -140,8 +136,6 @@ class LLMEngine(private val context: Context) {
                 throw IllegalStateException("Insufficient memory. Model: ${fileSizeMB}MB, Available: ${availableMB}MB. Close other apps.")
             }
 
-            // Handle RTLM format - Currently MediaPipe 0.10.27 doesn't support it
-            // The LiteRT GenAI SDK is needed but may not be available yet on Maven
             if (modelFormat == ModelFormat.LITERT) {
                 Log.w(TAG, "RTLM format detected. Attempting to load with MediaPipe (may fail)...")
                 Log.w(TAG, "Note: RTLM format requires LiteRT GenAI SDK. If load fails, use .task files instead.")
@@ -181,7 +175,6 @@ class LLMEngine(private val context: Context) {
                 llmInference = null
                 Log.e(TAG, "Runtime error loading model", e)
 
-                // Check if it's the RTLM format error
                 val message = e.message ?: ""
                 if (message.contains("RTLM") || message.contains("TFL3")) {
                     Result.failure(Exception(
@@ -225,18 +218,18 @@ class LLMEngine(private val context: Context) {
         try {
             val inference = llmInference ?: throw IllegalStateException("Model unloaded during generation")
 
-            // Use streaming generation
-            inference.generateResponseAsync(prompt).let { future ->
-                try {
-                    // For streaming, we use the result listener pattern
-                    val result = future.get() // This blocks but we're on IO dispatcher
+            // Use streaming generation with result listener callback
+            inference.generateResponseAsync(prompt) { partialResult, done ->
+                val currentTime = System.currentTimeMillis()
 
-                    val currentTime = System.currentTimeMillis()
-                    if (tokenCount == 0) {
-                        firstTokenTime = currentTime - startTime
-                    }
+                if (tokenCount == 0 && partialResult.isNotEmpty()) {
+                    firstTokenTime = currentTime - startTime
+                    Log.d(TAG, "TTFT: ${firstTokenTime}ms")
+                }
+
+                if (partialResult.isNotEmpty()) {
                     tokenCount++
-                    fullResponse.append(result)
+                    fullResponse.append(partialResult)
 
                     val totalTime = currentTime - startTime
                     val tokensPerSecond = if (totalTime > 0) {
@@ -250,22 +243,24 @@ class LLMEngine(private val context: Context) {
                         tokensPerSecond = tokensPerSecond
                     )
 
-                    trySend(Pair(result, metrics))
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error getting async result", e)
-                    throw e
+                    Log.d(TAG, "Token $tokenCount: '${partialResult.take(20)}...' @ ${tokensPerSecond}t/s")
+                    trySend(Pair(partialResult, metrics))
+                }
+
+                if (done) {
+                    Log.d(TAG, "Generation complete. Total tokens: $tokenCount")
+                    close()
                 }
             }
 
-            Log.d(TAG, "Generation complete. Tokens: $tokenCount")
-            close()
+            // Keep the flow alive until generation completes
+            awaitClose {
+                Log.d(TAG, "Flow closed, total response length: ${fullResponse.length}")
+            }
+
         } catch (e: Exception) {
             Log.e(TAG, "Generation error", e)
             close(e)
-        }
-
-        awaitClose {
-            Log.d(TAG, "Flow closed")
         }
     }.flowOn(Dispatchers.IO)
 
