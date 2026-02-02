@@ -507,8 +507,9 @@ e8fb2c8 - Phase 0 Complete: Project setup, dependencies, cyberpunk theme
 
 ## GITHUB REPOSITORY
 
-**Repository:** https://github.com/anthropics/ginference (TO BE CREATED)
-**Releases:** APK available in GitHub Releases
+**Repository:** https://github.com/MukundKal/ginference
+**Releases:** https://github.com/MukundKal/ginference/releases
+**Latest APK:** https://github.com/MukundKal/ginference/releases/tag/v0.9.0-beta
 
 ---
 
