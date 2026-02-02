@@ -38,7 +38,13 @@ class MainActivity : ComponentActivity() {
                     vramUsage = state.vramUsage,
                     cpuUsage = state.cpuUsage,
                     gpuUsage = state.gpuUsage,
-                    temperature = state.temperature
+                    temperature = state.temperature,
+                    showModelSelector = state.showModelSelector,
+                    availableModels = state.availableModels,
+                    onShowModelSelector = { viewModel.showModelSelector() },
+                    onHideModelSelector = { viewModel.hideModelSelector() },
+                    onModelSelect = { model -> viewModel.selectModel(model) },
+                    onModelDownload = { model -> viewModel.downloadModel(model) }
                 )
             }
         }

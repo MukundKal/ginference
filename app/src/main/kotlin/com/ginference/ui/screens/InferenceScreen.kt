@@ -12,9 +12,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.ginference.inference.ModelInfo
+import com.ginference.ui.components.ModelSelectorDialog
+import com.ginference.ui.components.ModelState
 import com.ginference.ui.theme.*
+import kotlinx.coroutines.delay
 
 data class Message(
     val content: String,
@@ -36,6 +41,12 @@ fun InferenceScreen(
     cpuUsage: Float,
     gpuUsage: Float,
     temperature: Float,
+    showModelSelector: Boolean,
+    availableModels: List<ModelState>,
+    onShowModelSelector: () -> Unit,
+    onHideModelSelector: () -> Unit,
+    onModelSelect: (ModelInfo) -> Unit,
+    onModelDownload: (ModelInfo) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -47,6 +58,8 @@ fun InferenceScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             Header(
+                isGenerating = isGenerating,
+                onShowModelSelector = onShowModelSelector,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -88,11 +101,24 @@ fun InferenceScreen(
                     .padding(12.dp)
             )
         }
+
+        if (showModelSelector) {
+            ModelSelectorDialog(
+                models = availableModels,
+                onModelSelect = onModelSelect,
+                onModelDownload = onModelDownload,
+                onDismiss = onHideModelSelector
+            )
+        }
     }
 }
 
 @Composable
-private fun Header(modifier: Modifier = Modifier) {
+private fun Header(
+    isGenerating: Boolean,
+    onShowModelSelector: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -103,12 +129,40 @@ private fun Header(modifier: Modifier = Modifier) {
             color = MatrixGreen,
             style = CyberpunkTypography.terminalLarge
         )
-        Text(
-            text = "READY",
-            color = CyanNeon,
-            style = CyberpunkTypography.terminalSmall
-        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "[MODEL]",
+                color = CyanNeon,
+                style = CyberpunkTypography.terminalSmall,
+                modifier = Modifier.clickableNoRipple { onShowModelSelector() }
+            )
+            LoadingSpinner(isGenerating = isGenerating)
+        }
     }
+}
+
+@Composable
+private fun LoadingSpinner(isGenerating: Boolean) {
+    val spinnerFrames = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+    var frameIndex by remember { mutableStateOf(0) }
+
+    LaunchedEffect(isGenerating) {
+        if (isGenerating) {
+            while (true) {
+                delay(80)
+                frameIndex = (frameIndex + 1) % spinnerFrames.size
+            }
+        }
+    }
+
+    Text(
+        text = if (isGenerating) spinnerFrames[frameIndex] else "READY",
+        color = if (isGenerating) HotPink else CyanNeon,
+        style = CyberpunkTypography.terminalSmall
+    )
 }
 
 @Composable
@@ -184,12 +238,7 @@ private fun OutputArea(
 
                 if (currentOutput.isNotEmpty()) {
                     item {
-                        MessageBubble(
-                            Message(
-                                content = currentOutput + if (isGenerating) "█" else "",
-                                isUser = false
-                            )
-                        )
+                        GeneratingMessage(currentOutput, isGenerating)
                     }
                 }
             }
@@ -218,6 +267,28 @@ private fun MessageBubble(message: Message) {
 }
 
 @Composable
+private fun GeneratingMessage(content: String, isGenerating: Boolean) {
+    val cursorFrames = listOf("█", "▓", "▒", "░", " ")
+    var cursorIndex by remember { mutableStateOf(0) }
+
+    LaunchedEffect(isGenerating) {
+        if (isGenerating) {
+            while (true) {
+                delay(200)
+                cursorIndex = (cursorIndex + 1) % cursorFrames.size
+            }
+        }
+    }
+
+    MessageBubble(
+        Message(
+            content = content + if (isGenerating) cursorFrames[cursorIndex] else "",
+            isUser = false
+        )
+    )
+}
+
+@Composable
 private fun InputArea(
     onSendPrompt: (String) -> Unit,
     onStopGeneration: () -> Unit,
@@ -225,6 +296,7 @@ private fun InputArea(
     modifier: Modifier = Modifier
 ) {
     var inputText by remember { mutableStateOf("") }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     Row(
         modifier = modifier,
@@ -262,6 +334,7 @@ private fun InputArea(
                 if (isGenerating) {
                     onStopGeneration()
                 } else {
+                    keyboardController?.hide()
                     onSendPrompt(inputText)
                     inputText = ""
                 }

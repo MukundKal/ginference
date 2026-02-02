@@ -5,10 +5,18 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ginference.inference.LLMEngine
+import com.ginference.inference.ModelInfo
 import com.ginference.inference.ModelManager
 import com.ginference.metrics.InferenceMetrics
 import com.ginference.metrics.SystemMetrics
+import com.ginference.ui.components.ModelState
 import com.ginference.ui.screens.Message
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.io.File
+import java.io.FileOutputStream
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,7 +38,10 @@ data class InferenceState(
     val vramUsage: String = "--",
     val cpuUsage: Float = 0f,
     val gpuUsage: Float = 0f,
-    val temperature: Float = 0f
+    val temperature: Float = 0f,
+    val showModelSelector: Boolean = false,
+    val availableModels: List<ModelState> = emptyList(),
+    val currentModelId: String? = null
 )
 
 class InferenceViewModel(application: Application) : AndroidViewModel(application) {
@@ -39,6 +50,7 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
     private val modelManager = ModelManager(application)
     private val systemMetrics = SystemMetrics(application)
     private val inferenceMetrics = InferenceMetrics()
+    private val okHttpClient = OkHttpClient()
 
     private val _state = MutableStateFlow(InferenceState())
     val state: StateFlow<InferenceState> = _state.asStateFlow()
@@ -49,6 +61,112 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
     init {
         Log.d(TAG, "InferenceViewModel initialized")
         startMetricsCollection()
+        loadAvailableModels()
+    }
+
+    private fun loadAvailableModels() {
+        viewModelScope.launch {
+            val models = modelManager.getAllModels()
+            val modelStates = models.map { model ->
+                ModelState(
+                    model = model,
+                    isDownloaded = modelManager.isModelDownloaded(model),
+                    isDownloading = false,
+                    downloadProgress = 0f,
+                    isSelected = false
+                )
+            }
+            _state.value = _state.value.copy(availableModels = modelStates)
+        }
+    }
+
+    fun showModelSelector() {
+        _state.value = _state.value.copy(showModelSelector = true)
+    }
+
+    fun hideModelSelector() {
+        _state.value = _state.value.copy(showModelSelector = false)
+    }
+
+    fun selectModel(model: ModelInfo) {
+        if (!modelManager.isModelDownloaded(model)) {
+            Log.w(TAG, "Model not downloaded: ${model.name}")
+            return
+        }
+
+        hideModelSelector()
+        loadModel(modelManager.getModelPath(model), model.name)
+        _state.value = _state.value.copy(currentModelId = model.id)
+        updateModelStates()
+    }
+
+    fun downloadModel(model: ModelInfo) {
+        viewModelScope.launch {
+            try {
+                Log.d(TAG, "Starting download: ${model.name}")
+                updateModelDownloadState(model.id, isDownloading = true, progress = 0f)
+
+                val outputFile = modelManager.getModelFile(model)
+                val request = Request.Builder().url(model.url).build()
+
+                withContext(Dispatchers.IO) {
+                    val response = okHttpClient.newCall(request).execute()
+                    if (!response.isSuccessful) {
+                        throw Exception("Download failed: ${response.code}")
+                    }
+
+                    val body = response.body ?: throw Exception("Empty response body")
+                    val contentLength = body.contentLength()
+                    val inputStream = body.byteStream()
+                    val outputStream = FileOutputStream(outputFile)
+
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    var totalBytes = 0L
+
+                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        outputStream.write(buffer, 0, bytesRead)
+                        totalBytes += bytesRead
+
+                        if (contentLength > 0) {
+                            val progress = totalBytes.toFloat() / contentLength.toFloat()
+                            updateModelDownloadState(model.id, isDownloading = true, progress = progress)
+                        }
+                    }
+
+                    outputStream.close()
+                    inputStream.close()
+                }
+
+                Log.d(TAG, "Download complete: ${model.name}")
+                updateModelDownloadState(model.id, isDownloading = false, progress = 1f)
+                loadAvailableModels()
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Download failed: ${model.name}", e)
+                updateModelDownloadState(model.id, isDownloading = false, progress = 0f)
+                _state.value = _state.value.copy(error = "Download failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun updateModelDownloadState(modelId: String, isDownloading: Boolean, progress: Float) {
+        val updatedModels = _state.value.availableModels.map { modelState ->
+            if (modelState.model.id == modelId) {
+                modelState.copy(isDownloading = isDownloading, downloadProgress = progress)
+            } else {
+                modelState
+            }
+        }
+        _state.value = _state.value.copy(availableModels = updatedModels)
+    }
+
+    private fun updateModelStates() {
+        val currentId = _state.value.currentModelId
+        val updatedModels = _state.value.availableModels.map { modelState ->
+            modelState.copy(isSelected = modelState.model.id == currentId)
+        }
+        _state.value = _state.value.copy(availableModels = updatedModels)
     }
 
     fun sendPrompt(prompt: String) {
@@ -136,7 +254,7 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun loadModel(modelPath: String, modelName: String) {
+    private fun loadModel(modelPath: String, modelName: String) {
         viewModelScope.launch {
             try {
                 Log.d(TAG, "Loading model: $modelName")
