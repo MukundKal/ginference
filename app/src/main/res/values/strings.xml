@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ginference</string>
+    <string name="prompt_hint">ENTER PROMPT_</string>
+    <string name="generate">EXECUTE</string>
+    <string name="stop">ABORT</string>
+    <string name="clear">PURGE</string>
+    <string name="downloading">DOWNLOADING MODEL</string>
+    <string name="loading_model">LOADING MODEL</string>
+    <string name="model_ready">MODEL READY</string>
+    <string name="error_load">ERROR: LOAD FAILED</string>
+    <string name="error_download">ERROR: DOWNLOAD FAILED</string>
+    <string name="select_model">SELECT MODEL</string>
+    <string name="metrics_title">SYSTEM METRICS</string>
+    <string name="ttft">TTFT</string>
+    <string name="tokens_per_sec">TOK/SEC</string>
+    <string name="gpu_usage">GPU</string>
+    <string name="ram_usage">RAM</string>
+    <string name="vram_usage">VRAM</string>
+    <string name="cpu_usage">CPU</string>
+    <string name="temperature">TEMP</string>
+</resources>
