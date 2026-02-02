@@ -5,9 +5,10 @@
 
 ## PROJECT STATUS
 
-**Current Phase:** Phase 6 (Polish) - PENDING TESTING
-**Completed:** Phases 0-5 ✓
-**Next:** Test with .task model files, then settings/error handling
+**Current Phase:** Phase 7 (Whisper) - ✅ COMPLETE
+**Completed:** Phases 0-5 ✓, Phase 7 ✓
+**Next:** Test with .task LLM model and .bin Whisper model on device
+**APK Size:** 64MB (includes libwhisper.so for all ABIs)
 
 ### ⚠️ KNOWN ISSUE: RTLM Format Not Supported
 
@@ -126,6 +127,7 @@ Layer 3: Adreno GPU (Qualcomm drivers)
 - `androidx.lifecycle:lifecycle-viewmodel-compose`
 - `androidx.documentfile:documentfile:1.0.1` (Storage Access Framework)
 - `org.jetbrains.kotlinx:kotlinx-coroutines-android`
+- whisper.cpp JNI bindings (for Whisper transcription) - Phase 7
 
 **System APIs:**
 - `ActivityManager` - RAM metrics
@@ -152,7 +154,10 @@ ginference/
 │   │   │   │       └── ModelSelector.kt
 │   │   │   ├── inference/
 │   │   │   │   ├── LLMEngine.kt (MediaPipe wrapper)
+│   │   │   │   ├── WhisperEngine.kt (whisper.cpp JNI) [PHASE 7]
 │   │   │   │   └── ModelManager.kt (folder scanning)
+│   │   │   ├── audio/
+│   │   │   │   └── AudioRecorder.kt [PHASE 7]
 │   │   │   ├── metrics/
 │   │   │   │   ├── SystemMetrics.kt
 │   │   │   │   └── InferenceMetrics.kt
@@ -383,10 +388,12 @@ Snapdragon 8 Gen 3 Adreno GPU
 - `READ_EXTERNAL_STORAGE` - Legacy (SDK < 33)
 - `WRITE_EXTERNAL_STORAGE` - Legacy (SDK < 33)
 - `MANAGE_EXTERNAL_STORAGE` - Android 11+ (for broader access)
+- `RECORD_AUDIO` - For Whisper transcription (Phase 7)
 
 **Runtime Permissions:**
 - Storage Access Framework folder picker (no dangerous permissions)
 - Persistable URI permissions granted on folder selection
+- Microphone permission for voice recording (Phase 7)
 
 ---
 
@@ -432,6 +439,195 @@ e8fb2c8 - Phase 0 Complete: Project setup, dependencies, cyberpunk theme
 
 ---
 
+## PHASE 7: WHISPER SPEECH-TO-TEXT (IN PROGRESS)
+
+### Overview
+Add offline speech-to-text transcription using Whisper models. When a Whisper model is loaded, users can record audio and get transcriptions - either standalone or as input to the LLM.
+
+### Status: ✅ COMPLETE
+
+**What's Done:**
+- ✅ `WhisperEngine.kt` - JNI wrapper using WhisperContext
+- ✅ `WhisperLib.kt` - Official whisper.cpp JNI bridge (com.whispercpp.whisper)
+- ✅ `AudioRecorder.kt` - 16kHz mono recording
+- ✅ `ModelManager.kt` - Scans .bin files, shows [ASR] badge
+- ✅ `InferenceViewModel.kt` - Transcription state management
+- ✅ `InferenceScreen.kt` - Mic button, recording UI, transcription display
+- ✅ `AndroidManifest.xml` - RECORD_AUDIO permission
+- ✅ `libwhisper.so` - Pre-built for arm64-v8a, armeabi-v7a, x86, x86_64
+
+### 7.0: Architecture Design ✅
+**Engine Separation:**
+- `LLMEngine.kt` - Text generation (existing)
+- `WhisperEngine.kt` - Audio transcription (NEW) ✅
+- Both engines can be loaded simultaneously
+
+**Model Detection:**
+- LLM models: `.task`, `.litertlm` → Load with MediaPipe
+- Whisper models: `.bin` (ggml format) → Load with whisper.cpp JNI
+
+### 7.1: Add whisper.cpp Native Library ✅ COMPLETE
+- [x] Built whisper.cpp from official source
+- [x] Placed libwhisper.so in `app/src/main/jniLibs/{abi}/`
+- [x] All ABIs included: arm64-v8a (567KB), armeabi-v7a (337KB), x86 (663KB), x86_64 (633KB)
+
+**Library Source:**
+Built from official https://github.com/ggerganov/whisper.cpp
+using examples/whisper.android with local Android SDK/NDK.
+
+**Recommended whisper.cpp models (.bin format):**
+- `ggml-tiny.en.bin` (75MB) - Fast, English only ⭐ RECOMMENDED
+- `ggml-base.en.bin` (142MB) - Better accuracy
+- `ggml-small.en.bin` (466MB) - Good balance
+- `ggml-tiny.bin` (75MB) - Multilingual
+
+**Download from:** https://huggingface.co/ggerganov/whisper.cpp/tree/main
+
+### 7.2: Create WhisperEngine.kt ✅ COMPLETE
+```
+WhisperEngine.kt implemented with:
+- JNI interface to whisper.cpp (whisperInit, whisperTranscribe, whisperFree)
+- Model loading from .bin files via content URI or file path
+- Audio transcription (PCM 16kHz mono float samples)
+- Memory management and model unloading
+- Library availability check with helpful error messages
+```
+
+**Key methods (implemented):**
+- `loadModel(modelPath: String): Result<Unit>` ✅
+- `transcribe(audioData: ShortArray): Result<TranscriptionResult>` ✅
+- `isModelLoaded(): Boolean` ✅
+- `unload()` ✅
+- `isLibraryAvailable(): Boolean` ✅ (static)
+
+### 7.3: Update ModelManager.kt ✅ COMPLETE
+- [x] Extended `scanModels()` to detect model type
+- [x] Added `ModelType` enum: `LLM`, `WHISPER`
+- [x] Scans for `.bin` files (ggml-tiny, ggml-base, etc.)
+- [x] Added `getModelType(fileName: String): ModelType`
+
+**Updated ModelInfo:**
+```kotlin
+data class ModelInfo(
+    val id: String,
+    val name: String,
+    val fileName: String,
+    val size: Long,
+    val uri: Uri,
+    val type: ModelType  // NEW: LLM or WHISPER
+)
+
+enum class ModelType {
+    LLM,      // .task, .litertlm
+    WHISPER   // .bin (whisper.cpp format)
+}
+```
+
+### 7.4: Add Audio Recording ✅ COMPLETE
+- [x] Added `RECORD_AUDIO` permission to AndroidManifest.xml
+- [x] Created `AudioRecorder.kt` utility class
+- [x] Records PCM audio at 16kHz mono (Whisper requirement)
+- [x] Start/stop recording with amplitude callback
+- [x] Max 60 second recordings with buffer management
+
+**AudioRecorder.kt (implemented):**
+```kotlin
+class AudioRecorder(context: Context) {
+    fun startRecording(onAmplitude: ((Float) -> Unit)?): Result<Unit>
+    fun stopRecording(): ShortArray  // PCM data
+    fun isCurrentlyRecording(): Boolean
+    fun hasRecordPermission(): Boolean
+    fun getRecordingDurationMs(): Long
+}
+```
+
+### 7.5: Update InferenceViewModel ✅ COMPLETE
+- [x] Added `whisperEngine: WhisperEngine`
+- [x] Added `audioRecorder: AudioRecorder`
+- [x] Added transcription state to `InferenceState`
+- [x] Added `loadWhisperModel()` with library check
+- [x] Added `startRecording()` / `stopRecordingAndTranscribe()`
+- [x] Added `useTranscriptionAsPrompt()` to pipe to LLM
+
+**New state fields (implemented):**
+```kotlin
+data class InferenceState(
+    // ... existing fields ...
+    val isWhisperLoaded: Boolean = false,
+    val isLoadingWhisper: Boolean = false,
+    val whisperModelName: String = "",
+    val isRecording: Boolean = false,
+    val isTranscribing: Boolean = false,
+    val transcriptionText: String = "",
+    val recordingDuration: String = "0.0s",
+    val recordingAmplitude: Float = 0f
+)
+```
+
+### 7.6: Update UI for Voice Input ✅ COMPLETE
+- [x] Added microphone button (◉) to InputArea
+- [x] Recording indicator with amplitude visualization bars
+- [x] Transcription display in output area with "> TRANSCRIPTION" header
+- [x] "USE AS PROMPT" and "CLEAR" buttons for transcription
+- [x] Header shows both LLM and Whisper model names when loaded
+
+**UI Flow (implemented):**
+1. User taps [MIC] button → Recording starts (red pulsing ●)
+2. User taps again → Recording stops, transcription begins
+3. Transcription appears below chat with pink header
+4. User can tap "USE AS PROMPT" to send to LLM
+
+### 7.7: Model Selector Updates ✅ COMPLETE
+- [x] Shows model type badge: `[LLM]` in cyan, `[ASR]` in pink
+- [x] Different accent colors for model types
+- [x] Updated help text: "LLM: .task/.litertlm | WHISPER: .bin (ggml-*)"
+- [x] Can load one LLM + one Whisper simultaneously
+
+---
+
+## WHISPER INTEGRATION TECH STACK
+
+```
+Audio Input (Microphone)
+    ↓
+AudioRecorder.kt (PCM 16kHz mono)
+    ↓
+WhisperEngine.kt (JNI wrapper)
+    ↓
+whisper.cpp (native C++)
+    ↓
+ggml-*.bin model
+    ↓
+Transcription Text
+    ↓ (optional)
+LLMEngine.kt → Response
+```
+
+---
+
+## WHISPER MODEL INSTALLATION
+
+**Same workflow as LLM models:**
+1. Download `.bin` file from HuggingFace
+2. Place in same model folder as LLM models
+3. App scans folder, detects model type by extension
+4. Whisper models appear with [WHISPER] badge
+5. Tap to load into memory
+
+**Recommended Models:**
+| Model | Size | Speed | Quality |
+|-------|------|-------|---------|
+| ggml-tiny.en.bin | 75MB | ⚡⚡⚡ | ★★☆ |
+| ggml-base.en.bin | 142MB | ⚡⚡ | ★★★ |
+| ggml-small.en.bin | 466MB | ⚡ | ★★★★ |
+
+**Download Links:**
+- Tiny EN: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+- Base EN: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+- Small EN: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin
+
+---
+
 ## SUCCESS CRITERIA FOR V1
 
 - [x] App launches with cyberpunk UI
@@ -445,6 +641,16 @@ e8fb2c8 - Phase 0 Complete: Project setup, dependencies, cyberpunk theme
 - [x] Keyboard auto-hides on Execute
 - [ ] No crashes during normal operation
 - [ ] Settings panel functional
+
+## SUCCESS CRITERIA FOR V2 (WHISPER)
+
+- [ ] Detect Whisper models (.bin) in model folder
+- [ ] Load Whisper model via whisper.cpp JNI
+- [ ] Record audio from microphone (16kHz mono PCM)
+- [ ] Transcribe audio to text
+- [ ] Display transcription in UI
+- [ ] Optional: Pipe transcription to LLM as prompt
+- [ ] Can have both LLM and Whisper models loaded simultaneously
 
 ---
 
@@ -504,6 +710,36 @@ e8fb2c8 - Phase 0 Complete: Project setup, dependencies, cyberpunk theme
 4. **Verify model loads and generates text**
 5. **Complete Phase 6 (settings, error handling)**
 6. **Final commit for v1.0**
+
+## NEXT STEPS ✅ WHISPER INTEGRATION COMPLETE
+
+### Ready to Test!
+
+**Step 1: Download a Whisper model**
+```bash
+wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+adb push ggml-tiny.en.bin /sdcard/llms/
+```
+
+**Step 2: Deploy and test**
+```bash
+./deploy.sh
+```
+
+**Step 3: In the app**
+1. Open [MODEL] selector
+2. Whisper models show with [ASR] badge (pink)
+3. Tap to load whisper model
+4. Tap mic button (◉) to record
+5. Tap again to stop and transcribe
+6. Optionally tap "USE AS PROMPT" to send to LLM
+
+### What's included in the APK:
+- ✅ libwhisper.so for all ABIs (arm64-v8a, armeabi-v7a, x86, x86_64)
+- ✅ WhisperContext + WhisperLib JNI bridge
+- ✅ AudioRecorder for 16kHz mono PCM
+- ✅ Full UI with mic button, amplitude bars, transcription display
+- ✅ RECORD_AUDIO permission handling
 
 ## GITHUB REPOSITORY
 

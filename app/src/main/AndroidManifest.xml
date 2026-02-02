@@ -19,6 +19,9 @@
         tools:ignore="ScopedStorage"
     />
 
+    <!-- Whisper speech-to-text -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <uses-feature
         android:name="android.hardware.opengles.aep"
         android:required="false"

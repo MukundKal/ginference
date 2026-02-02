@@ -60,6 +60,10 @@ dependencies {
     // Note: .litertlm (RTLM) format requires LiteRT GenAI SDK which is not yet public
     implementation("com.google.mediapipe:tasks-genai:0.10.27")
 
+    // Whisper speech-to-text: WhisperEngine uses JNI to call whisper.cpp
+    // User must add libwhisper.so to app/src/main/jniLibs/{abi}/
+    // Or use pre-built AAR from: https://github.com/ggerganov/whisper.cpp/tree/master/examples/whisper.android
+
     // Compose
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")

@@ -4,9 +4,12 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.ginference.audio.AudioRecorder
 import com.ginference.inference.LLMEngine
 import com.ginference.inference.ModelInfo
 import com.ginference.inference.ModelManager
+import com.ginference.inference.ModelType
+import com.ginference.inference.WhisperEngine
 import com.ginference.metrics.InferenceMetrics
 import com.ginference.metrics.SystemMetrics
 import com.ginference.ui.screens.Message
@@ -39,12 +42,23 @@ data class InferenceState(
     val storagePath: String = "",
     val cacheSize: String = "0B",
     val freeSpace: String = "0GB",
-    val isFolderSet: Boolean = false
+    val isFolderSet: Boolean = false,
+    // Whisper transcription state
+    val isWhisperLoaded: Boolean = false,
+    val isLoadingWhisper: Boolean = false,
+    val whisperModelName: String = "",
+    val isRecording: Boolean = false,
+    val isTranscribing: Boolean = false,
+    val transcriptionText: String = "",
+    val recordingDuration: String = "0.0s",
+    val recordingAmplitude: Float = 0f
 )
 
 class InferenceViewModel(application: Application) : AndroidViewModel(application) {
 
     private val llmEngine = LLMEngine(application)
+    private val whisperEngine = WhisperEngine(application)
+    private val audioRecorder = AudioRecorder(application)
     private val modelManager = ModelManager(application)
     private val systemMetrics = SystemMetrics(application)
     private val inferenceMetrics = InferenceMetrics()
@@ -54,6 +68,7 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
 
     private var generationJob: Job? = null
     private var metricsJob: Job? = null
+    private var transcriptionJob: Job? = null
 
     init {
         Log.d(TAG, "InferenceViewModel initialized")
@@ -112,8 +127,15 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun selectModel(model: ModelInfo) {
         hideModelSelector()
-        loadModel(model.uri.toString(), model.name)
-        _state.value = _state.value.copy(currentModelId = model.id)
+        when (model.type) {
+            ModelType.LLM -> {
+                loadModel(model.uri.toString(), model.name)
+                _state.value = _state.value.copy(currentModelId = model.id)
+            }
+            ModelType.WHISPER -> {
+                loadWhisperModel(model.uri.toString(), model.name)
+            }
+        }
     }
 
     fun refreshModels() {
@@ -250,11 +272,174 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
         _state.value = _state.value.copy(
             messages = emptyList(),
             currentOutput = "",
-            error = null
+            error = null,
+            transcriptionText = ""
         )
         inferenceMetrics.reset()
         Log.d(TAG, "Messages cleared")
     }
+
+    // ========== WHISPER TRANSCRIPTION ==========
+
+    private fun loadWhisperModel(modelPath: String, modelName: String) {
+        viewModelScope.launch {
+            try {
+                // Check if native library is available
+                if (!WhisperEngine.isLibraryAvailable()) {
+                    val errorMsg = WhisperEngine.getLibraryError() ?: "Unknown error"
+                    Log.w(TAG, "Whisper library not available: $errorMsg")
+                    _state.value = _state.value.copy(
+                        isLoadingWhisper = false,
+                        isWhisperLoaded = false,
+                        error = "Whisper not available: Native library (libwhisper.so) not found.\n\n" +
+                                "To enable Whisper:\n" +
+                                "1. Build whisper.cpp for Android\n" +
+                                "2. Place libwhisper.so in jniLibs/\n\n" +
+                                "See: github.com/ggerganov/whisper.cpp"
+                    )
+                    return@launch
+                }
+
+                Log.d(TAG, "Loading Whisper model: $modelName")
+                _state.value = _state.value.copy(
+                    isLoadingWhisper = true,
+                    isWhisperLoaded = false,
+                    error = null
+                )
+
+                val result = whisperEngine.loadModel(modelPath)
+
+                result.onSuccess {
+                    _state.value = _state.value.copy(
+                        isWhisperLoaded = true,
+                        isLoadingWhisper = false,
+                        whisperModelName = modelName,
+                        error = null
+                    )
+                    Log.d(TAG, "Whisper model loaded successfully")
+                }.onFailure { e ->
+                    _state.value = _state.value.copy(
+                        isWhisperLoaded = false,
+                        isLoadingWhisper = false,
+                        error = "Whisper load failed: ${e.message}"
+                    )
+                    Log.e(TAG, "Whisper model load failed", e)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Whisper model load error", e)
+                _state.value = _state.value.copy(
+                    isWhisperLoaded = false,
+                    isLoadingWhisper = false,
+                    error = "Whisper error: ${e.message}"
+                )
+            }
+        }
+    }
+
+    fun hasRecordPermission(): Boolean {
+        return audioRecorder.hasRecordPermission()
+    }
+
+    fun isWhisperLibraryAvailable(): Boolean {
+        return WhisperEngine.isLibraryAvailable()
+    }
+
+    fun startRecording() {
+        if (_state.value.isRecording) return
+        if (!_state.value.isWhisperLoaded) {
+            _state.value = _state.value.copy(error = "Load a Whisper model first")
+            return
+        }
+
+        val result = audioRecorder.startRecording { amplitude ->
+            _state.value = _state.value.copy(
+                recordingAmplitude = amplitude,
+                recordingDuration = AudioRecorder.formatDuration(audioRecorder.getRecordingSamples())
+            )
+        }
+
+        result.onSuccess {
+            _state.value = _state.value.copy(
+                isRecording = true,
+                error = null,
+                transcriptionText = ""
+            )
+            Log.d(TAG, "Recording started")
+        }.onFailure { e ->
+            _state.value = _state.value.copy(
+                error = "Recording failed: ${e.message}"
+            )
+            Log.e(TAG, "Failed to start recording", e)
+        }
+    }
+
+    fun stopRecordingAndTranscribe() {
+        if (!_state.value.isRecording) return
+
+        val audioData = audioRecorder.stopRecording()
+        _state.value = _state.value.copy(
+            isRecording = false,
+            recordingAmplitude = 0f
+        )
+
+        if (audioData.isEmpty()) {
+            _state.value = _state.value.copy(error = "No audio recorded")
+            return
+        }
+
+        transcribe(audioData)
+    }
+
+    private fun transcribe(audioData: ShortArray) {
+        transcriptionJob?.cancel()
+        transcriptionJob = viewModelScope.launch {
+            try {
+                _state.value = _state.value.copy(
+                    isTranscribing = true,
+                    error = null
+                )
+
+                Log.d(TAG, "Transcribing ${audioData.size} samples...")
+
+                val result = whisperEngine.transcribe(audioData)
+
+                result.onSuccess { transcription ->
+                    _state.value = _state.value.copy(
+                        isTranscribing = false,
+                        transcriptionText = transcription.text,
+                        ttft = transcription.processingTimeMs
+                    )
+                    Log.d(TAG, "Transcription complete: ${transcription.text.take(50)}...")
+                }.onFailure { e ->
+                    _state.value = _state.value.copy(
+                        isTranscribing = false,
+                        error = "Transcription failed: ${e.message}"
+                    )
+                    Log.e(TAG, "Transcription failed", e)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Transcription error", e)
+                _state.value = _state.value.copy(
+                    isTranscribing = false,
+                    error = "Transcription error: ${e.message}"
+                )
+            }
+        }
+    }
+
+    fun useTranscriptionAsPrompt() {
+        val text = _state.value.transcriptionText
+        if (text.isNotBlank() && _state.value.isModelLoaded) {
+            sendPrompt(text)
+            _state.value = _state.value.copy(transcriptionText = "")
+        }
+    }
+
+    fun clearTranscription() {
+        _state.value = _state.value.copy(transcriptionText = "")
+    }
+
+    fun isWhisperAvailable(): Boolean = _state.value.isWhisperLoaded
 
     private fun startMetricsCollection() {
         metricsJob = viewModelScope.launch {
@@ -286,7 +471,13 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
         super.onCleared()
         generationJob?.cancel()
         metricsJob?.cancel()
+        transcriptionJob?.cancel()
+        if (_state.value.isRecording) {
+            audioRecorder.stopRecording()
+        }
+        audioRecorder.release()
         llmEngine.unload()
+        whisperEngine.unload()
         Log.d(TAG, "ViewModel cleared")
     }
 

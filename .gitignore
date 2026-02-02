@@ -127,3 +127,7 @@ Desktop.ini
 *.bin
 app/src/main/assets/*.litertlm
 app/src/main/assets/*.task
+
+# Whisper build directory (from setup-whisper.sh)
+.whisper-build/
+.whisper-download/

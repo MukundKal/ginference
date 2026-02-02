@@ -5,12 +5,18 @@ import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 
+enum class ModelType {
+    LLM,      // .task, .litertlm files - text generation
+    WHISPER   // .bin files (ggml format) - speech-to-text
+}
+
 data class ModelInfo(
     val id: String,
     val name: String,
     val fileName: String,
     val size: Long,
-    val uri: Uri
+    val uri: Uri,
+    val type: ModelType = ModelType.LLM
 )
 
 class ModelManager(private val context: Context) {
@@ -52,13 +58,14 @@ class ModelManager(private val context: Context) {
         }
 
         val modelFiles = folder.listFiles().filter { file ->
-            file.isFile && (file.name?.endsWith(".task") == true || file.name?.endsWith(".litertlm") == true)
+            file.isFile && isModelFile(file.name ?: "")
         }
 
         Log.d(TAG, "Scanned ${modelFiles.size} models in ${folder.uri}")
 
         return modelFiles.mapNotNull { file ->
             val name = file.name ?: return@mapNotNull null
+            val modelType = getModelType(name)
             ModelInfo(
                 id = name.substringBeforeLast("."),
                 name = name.substringBeforeLast(".")
@@ -66,9 +73,46 @@ class ModelManager(private val context: Context) {
                     .replace("_", " "),
                 fileName = name,
                 size = file.length(),
-                uri = file.uri
+                uri = file.uri,
+                type = modelType
             )
         }.sortedBy { it.name }
+    }
+
+    fun scanLLMModels(): List<ModelInfo> {
+        return scanModels().filter { it.type == ModelType.LLM }
+    }
+
+    fun scanWhisperModels(): List<ModelInfo> {
+        return scanModels().filter { it.type == ModelType.WHISPER }
+    }
+
+    private fun isModelFile(fileName: String): Boolean {
+        val lowerName = fileName.lowercase()
+        return lowerName.endsWith(".task") ||
+               lowerName.endsWith(".litertlm") ||
+               isWhisperModelFile(lowerName)
+    }
+
+    private fun isWhisperModelFile(fileName: String): Boolean {
+        val lowerName = fileName.lowercase()
+        return lowerName.endsWith(".bin") &&
+               (lowerName.contains("whisper") ||
+                lowerName.contains("ggml-tiny") ||
+                lowerName.contains("ggml-base") ||
+                lowerName.contains("ggml-small") ||
+                lowerName.contains("ggml-medium") ||
+                lowerName.contains("ggml-large"))
+    }
+
+    fun getModelType(fileName: String): ModelType {
+        val lowerName = fileName.lowercase()
+        return when {
+            isWhisperModelFile(lowerName) -> ModelType.WHISPER
+            lowerName.endsWith(".task") -> ModelType.LLM
+            lowerName.endsWith(".litertlm") -> ModelType.LLM
+            else -> ModelType.LLM
+        }
     }
 
     fun getModelByUri(uri: Uri): ModelInfo? {

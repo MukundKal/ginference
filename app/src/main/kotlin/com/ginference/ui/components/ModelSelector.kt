@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.ginference.inference.ModelInfo
+import com.ginference.inference.ModelType
 import com.ginference.ui.theme.*
 
 @Composable
@@ -94,7 +95,7 @@ fun ModelSelectorDialog(
                         )
                     }
                     Text(
-                        text = "Manually place .task or .litertlm files in storage path",
+                        text = "LLM: .task/.litertlm | WHISPER: .bin (ggml-*)",
                         color = HotPink.copy(alpha = 0.7f),
                         style = CyberpunkTypography.metric,
                         modifier = Modifier.padding(top = 4.dp)
@@ -149,16 +150,19 @@ private fun ModelItem(
     isSelected: Boolean,
     onSelect: () -> Unit
 ) {
+    val isWhisper = model.type == ModelType.WHISPER
+    val accentColor = if (isWhisper) HotPink else CyanNeon
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .border(
                 width = 1.dp,
-                color = if (isSelected) CyanNeon else MatrixGreen.copy(alpha = 0.5f)
+                color = if (isSelected) accentColor else MatrixGreen.copy(alpha = 0.5f)
             )
             .background(
                 if (isSelected) {
-                    CyanNeon.copy(alpha = 0.1f)
+                    accentColor.copy(alpha = 0.1f)
                 } else {
                     CyberpunkBackground
                 }
@@ -172,11 +176,19 @@ private fun ModelItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = model.name,
-                    color = if (isSelected) CyanNeon else MatrixGreen,
-                    style = CyberpunkTypography.terminal
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Model type badge
+                    ModelTypeBadge(type = model.type)
+
+                    Text(
+                        text = model.name,
+                        color = if (isSelected) accentColor else MatrixGreen,
+                        style = CyberpunkTypography.terminal
+                    )
+                }
                 Text(
                     text = model.fileName,
                     color = MatrixGreen.copy(alpha = 0.5f),
@@ -186,10 +198,30 @@ private fun ModelItem(
 
             Text(
                 text = if (isSelected) "✓ LOADED" else formatSize(model.size),
-                color = if (isSelected) CyanNeon else MatrixGreen.copy(alpha = 0.7f),
+                color = if (isSelected) accentColor else MatrixGreen.copy(alpha = 0.7f),
                 style = CyberpunkTypography.terminal
             )
         }
+    }
+}
+
+@Composable
+private fun ModelTypeBadge(type: ModelType) {
+    val (text, color) = when (type) {
+        ModelType.LLM -> "LLM" to CyanNeon
+        ModelType.WHISPER -> "ASR" to HotPink
+    }
+
+    Box(
+        modifier = Modifier
+            .border(1.dp, color)
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = text,
+            color = color,
+            style = CyberpunkTypography.metric
+        )
     }
 }
 

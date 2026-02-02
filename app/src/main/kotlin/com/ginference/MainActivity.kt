@@ -1,6 +1,8 @@
 package com.ginference
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -18,6 +20,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ginference.ui.screens.InferenceScreen
 import com.ginference.ui.theme.CyberpunkBackground
@@ -39,6 +43,16 @@ class MainActivity : ComponentActivity() {
         } ?: run {
             Log.w(TAG, "No folder selected, asking again")
             showFolderPicker()
+        }
+    }
+
+    private val recordAudioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            Log.d(TAG, "RECORD_AUDIO permission granted")
+        } else {
+            Log.w(TAG, "RECORD_AUDIO permission denied")
         }
     }
 
@@ -78,13 +92,54 @@ class MainActivity : ComponentActivity() {
                         onModelSelect = { model -> viewModel.selectModel(model) },
                         storagePath = state.storagePath,
                         cacheSize = state.cacheSize,
-                        freeSpace = state.freeSpace
+                        freeSpace = state.freeSpace,
+                        // Whisper transcription props
+                        isWhisperLoaded = state.isWhisperLoaded,
+                        isLoadingWhisper = state.isLoadingWhisper,
+                        whisperModelName = state.whisperModelName,
+                        isRecording = state.isRecording,
+                        isTranscribing = state.isTranscribing,
+                        transcriptionText = state.transcriptionText,
+                        recordingDuration = state.recordingDuration,
+                        recordingAmplitude = state.recordingAmplitude,
+                        hasRecordPermission = hasRecordAudioPermission(),
+                        onStartRecording = { viewModel.startRecording() },
+                        onStopRecording = { viewModel.stopRecordingAndTranscribe() },
+                        onUseTranscription = { viewModel.useTranscriptionAsPrompt() },
+                        onClearTranscription = { viewModel.clearTranscription() },
+                        onRequestRecordPermission = { requestRecordAudioPermission() }
                     )
                 }
             }
         }
 
         checkAndRequestFolderPermission()
+    }
+
+    private fun hasRecordAudioPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestRecordAudioPermission() {
+        when {
+            hasRecordAudioPermission() -> {
+                Log.d(TAG, "RECORD_AUDIO permission already granted")
+            }
+            ActivityCompat.shouldShowRequestPermissionRationale(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) -> {
+                Log.d(TAG, "Showing permission rationale")
+                recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+            else -> {
+                Log.d(TAG, "Requesting RECORD_AUDIO permission")
+                recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        }
     }
 
     private fun checkAndRequestFolderPermission() {
