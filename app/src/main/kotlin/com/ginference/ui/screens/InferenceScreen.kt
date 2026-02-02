@@ -32,6 +32,7 @@ fun InferenceScreen(
     currentOutput: String,
     isGenerating: Boolean,
     isModelLoaded: Boolean,
+    isLoadingModel: Boolean,
     modelName: String,
     onSendPrompt: (String) -> Unit,
     onStopGeneration: () -> Unit,
@@ -64,6 +65,7 @@ fun InferenceScreen(
                 isGenerating = isGenerating,
                 modelName = modelName,
                 isModelLoaded = isModelLoaded,
+                isLoadingModel = isLoadingModel,
                 onShowModelSelector = onShowModelSelector,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -127,6 +129,7 @@ private fun Header(
     isGenerating: Boolean,
     modelName: String,
     isModelLoaded: Boolean,
+    isLoadingModel: Boolean,
     onShowModelSelector: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -141,7 +144,13 @@ private fun Header(
                 color = MatrixGreen,
                 style = CyberpunkTypography.terminalLarge
             )
-            if (isModelLoaded) {
+            if (isLoadingModel) {
+                Text(
+                    text = "LOADING MODEL...",
+                    color = NeonYellow,
+                    style = CyberpunkTypography.metric
+                )
+            } else if (isModelLoaded) {
                 Text(
                     text = modelName,
                     color = CyanNeon.copy(alpha = 0.7f),
@@ -159,7 +168,7 @@ private fun Header(
                 style = CyberpunkTypography.terminalSmall,
                 modifier = Modifier.clickableNoRipple { onShowModelSelector() }
             )
-            LoadingSpinner(isGenerating = isGenerating)
+            LoadingSpinner(isGenerating = isGenerating || isLoadingModel)
         }
     }
 }

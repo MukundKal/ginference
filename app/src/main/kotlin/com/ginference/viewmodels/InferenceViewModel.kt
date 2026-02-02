@@ -23,6 +23,7 @@ data class InferenceState(
     val currentOutput: String = "",
     val isGenerating: Boolean = false,
     val isModelLoaded: Boolean = false,
+    val isLoadingModel: Boolean = false,
     val modelName: String = "",
     val error: String? = null,
     val ttft: Long = 0L,
@@ -208,13 +209,18 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             try {
                 Log.d(TAG, "Loading model: $modelName")
-                _state.value = _state.value.copy(error = "Loading model...")
+                _state.value = _state.value.copy(
+                    isLoadingModel = true,
+                    isModelLoaded = false,
+                    error = null
+                )
 
                 val result = llmEngine.loadModel(modelPath)
 
                 result.onSuccess {
                     _state.value = _state.value.copy(
                         isModelLoaded = true,
+                        isLoadingModel = false,
                         modelName = modelName,
                         error = null
                     )
@@ -222,14 +228,19 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
                 }.onFailure { e ->
                     _state.value = _state.value.copy(
                         isModelLoaded = false,
-                        error = "Failed to load model: ${e.message}"
+                        isLoadingModel = false,
+                        error = "Failed: ${e.message}",
+                        currentModelId = null
                     )
                     Log.e(TAG, "Model load failed", e)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Model load error", e)
                 _state.value = _state.value.copy(
-                    error = "Error: ${e.message}"
+                    isModelLoaded = false,
+                    isLoadingModel = false,
+                    error = "Error: ${e.message}",
+                    currentModelId = null
                 )
             }
         }
@@ -256,8 +267,8 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
                     val thermalMetrics = systemMetrics.getThermalMetrics()
 
                     _state.value = _state.value.copy(
-                        ramUsage = systemMetrics.formatBytes(ramMetrics.appRAM),
-                        vramUsage = systemMetrics.formatBytes(vramMetrics.estimatedAppVRAM),
+                        ramUsage = "${systemMetrics.formatBytes(ramMetrics.availableRAM)} free",
+                        vramUsage = "${systemMetrics.formatBytes(vramMetrics.totalVRAM - vramMetrics.usedVRAM)} free",
                         cpuUsage = cpuMetrics.usagePercent,
                         gpuUsage = gpuMetrics.usagePercent,
                         temperature = thermalMetrics.currentTemperature

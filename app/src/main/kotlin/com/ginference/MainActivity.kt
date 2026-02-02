@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
                         currentOutput = state.currentOutput,
                         isGenerating = state.isGenerating,
                         isModelLoaded = state.isModelLoaded,
+                        isLoadingModel = state.isLoadingModel,
                         modelName = state.modelName,
                         onSendPrompt = { prompt -> viewModel.sendPrompt(prompt) },
                         onStopGeneration = { viewModel.stopGeneration() },

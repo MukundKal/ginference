@@ -57,7 +57,7 @@ android {
 
 dependencies {
     // MediaPipe LLM Inference
-    implementation("com.google.mediapipe:tasks-genai:0.10.14")
+    implementation("com.google.mediapipe:tasks-genai:0.10.18")
 
     // Compose
     implementation("androidx.core:core-ktx:1.12.0")

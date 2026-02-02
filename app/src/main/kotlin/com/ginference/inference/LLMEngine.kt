@@ -1,6 +1,7 @@
 package com.ginference.inference
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import kotlinx.coroutines.Dispatchers
@@ -10,6 +11,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 
 class LLMEngine(private val context: Context) {
     private var llmInference: LlmInference? = null
@@ -22,36 +24,128 @@ class LLMEngine(private val context: Context) {
         val tokensPerSecond: Float = 0f
     )
 
+    private suspend fun copyUriToCache(uriString: String): File = withContext(Dispatchers.IO) {
+        val uri = Uri.parse(uriString)
+
+        val fileName = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            cursor.moveToFirst()
+            cursor.getString(nameIndex)
+        } ?: "model.task"
+
+        val cacheFile = File(context.cacheDir, fileName)
+
+        if (cacheFile.exists() && cacheFile.length() > 0) {
+            Log.d(TAG, "Using cached model: ${cacheFile.absolutePath}")
+            return@withContext cacheFile
+        }
+
+        Log.d(TAG, "Copying model from URI to cache: $fileName")
+
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(cacheFile).use { output ->
+                val buffer = ByteArray(8192)
+                var bytesRead: Int
+                var totalBytes = 0L
+
+                while (input.read(buffer).also { bytesRead = it } != -1) {
+                    output.write(buffer, 0, bytesRead)
+                    totalBytes += bytesRead
+
+                    if (totalBytes % (10 * 1024 * 1024) == 0L) {
+                        Log.d(TAG, "Copied ${totalBytes / 1024 / 1024} MB...")
+                    }
+                }
+
+                Log.d(TAG, "Copy complete: ${totalBytes / 1024 / 1024} MB")
+            }
+        } ?: throw IllegalStateException("Failed to open input stream from URI")
+
+        return@withContext cacheFile
+    }
+
     suspend fun loadModel(
-        modelPath: String,
-        maxTokens: Int = 512,
-        temperature: Float = 0.8f,
-        topK: Int = 40,
-        randomSeed: Int = 0
+        modelPath: String
     ): Result<Unit> = withContext(Dispatchers.IO) {
         return@withContext try {
-            val modelFile = File(modelPath)
-            if (!modelFile.exists()) {
-                throw IllegalArgumentException("Model file not found: $modelPath")
+            val actualPath: String = if (modelPath.startsWith("content://")) {
+                Log.d(TAG, "Detected content URI, copying to cache...")
+                val cachedFile = copyUriToCache(modelPath)
+                cachedFile.absolutePath
+            } else {
+                val modelFile = File(modelPath)
+                if (!modelFile.exists()) {
+                    throw IllegalArgumentException("Model file not found: $modelPath")
+                }
+                modelPath
             }
 
-            Log.d(TAG, "Loading model from: $modelPath")
-            Log.d(TAG, "File size: ${modelFile.length() / 1024 / 1024} MB")
+            Log.d(TAG, "Loading model from: $actualPath")
+            val modelFile = File(actualPath)
+            val fileSizeMB = modelFile.length() / 1024 / 1024
+            Log.d(TAG, "File size: $fileSizeMB MB")
+
+            // Validate file extension
+            if (!actualPath.endsWith(".task") && !actualPath.endsWith(".litertlm")) {
+                throw IllegalArgumentException("Invalid model format. Must be .task or .litertlm file")
+            }
+
+            // Check available memory
+            val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val memInfo = android.app.ActivityManager.MemoryInfo()
+            activityManager.getMemoryInfo(memInfo)
+            val availableMB = memInfo.availMem / 1024 / 1024
+
+            Log.d(TAG, "Available RAM: $availableMB MB, Model size: $fileSizeMB MB")
+
+            if (fileSizeMB > availableMB * 0.7) {
+                throw IllegalStateException("Insufficient memory. Model: ${fileSizeMB}MB, Available: ${availableMB}MB. Close other apps.")
+            }
+
+            Log.d(TAG, "Creating LlmInference with model metadata config...")
 
             val options = LlmInference.LlmInferenceOptions.builder()
-                .setModelPath(modelPath)
-                .setMaxTokens(maxTokens)
-                .setTemperature(temperature)
-                .setTopK(topK)
-                .setRandomSeed(randomSeed)
+                .setModelPath(actualPath)
                 .build()
 
             llmInference?.close()
-            llmInference = LlmInference.createFromOptions(context, options)
-            isLoaded = true
 
-            Log.d(TAG, "Model loaded successfully")
-            Result.success(Unit)
+            try {
+                llmInference = LlmInference.createFromOptions(context, options)
+                isLoaded = true
+                Log.d(TAG, "Model loaded successfully")
+                Result.success(Unit)
+            } catch (oom: OutOfMemoryError) {
+                isLoaded = false
+                llmInference = null
+                Log.e(TAG, "Out of memory loading model", oom)
+                Result.failure(Exception("Out of memory - model too large"))
+            } catch (e: IllegalArgumentException) {
+                isLoaded = false
+                llmInference = null
+                Log.e(TAG, "Invalid model format", e)
+                Result.failure(Exception("Invalid model: ${e.message}"))
+            } catch (e: UnsatisfiedLinkError) {
+                isLoaded = false
+                llmInference = null
+                Log.e(TAG, "Native library error", e)
+                Result.failure(Exception("Native error: ${e.message}"))
+            } catch (e: RuntimeException) {
+                isLoaded = false
+                llmInference = null
+                Log.e(TAG, "Runtime error loading model", e)
+                Result.failure(Exception("Load failed: ${e.message ?: "Unknown error"}"))
+            } catch (e: Error) {
+                isLoaded = false
+                llmInference = null
+                Log.e(TAG, "Fatal error loading model", e)
+                Result.failure(Exception("Fatal error: ${e.message ?: "Crash in native code"}"))
+            } catch (e: Throwable) {
+                isLoaded = false
+                llmInference = null
+                Log.e(TAG, "Unexpected error loading model", e)
+                Result.failure(Exception("Unexpected error: ${e.message ?: "Unknown"}"))
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load model", e)
             isLoaded = false
