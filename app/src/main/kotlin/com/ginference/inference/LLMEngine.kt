@@ -12,10 +12,18 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 
 class LLMEngine(private val context: Context) {
     private var llmInference: LlmInference? = null
     private var isLoaded = false
+    private var modelFormat: ModelFormat = ModelFormat.UNKNOWN
+
+    enum class ModelFormat {
+        UNKNOWN,
+        TFLITE,  // .task files (TFL3 format)
+        LITERT   // .litertlm files (RTLM format)
+    }
 
     data class GenerationMetrics(
         val ttft: Long = 0L,
@@ -23,6 +31,32 @@ class LLMEngine(private val context: Context) {
         val totalTime: Long = 0L,
         val tokensPerSecond: Float = 0f
     )
+
+    private fun detectModelFormat(file: File): ModelFormat {
+        return try {
+            RandomAccessFile(file, "r").use { raf ->
+                val header = ByteArray(4)
+                raf.read(header)
+                val magic = String(header, Charsets.US_ASCII)
+                Log.d(TAG, "Model magic header: $magic")
+                when (magic) {
+                    "TFL3" -> ModelFormat.TFLITE
+                    "RTLM" -> ModelFormat.LITERT
+                    else -> {
+                        // Try to detect by extension
+                        when {
+                            file.name.endsWith(".task") -> ModelFormat.TFLITE
+                            file.name.endsWith(".litertlm") -> ModelFormat.LITERT
+                            else -> ModelFormat.UNKNOWN
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error detecting model format", e)
+            ModelFormat.UNKNOWN
+        }
+    }
 
     private suspend fun copyUriToCache(uriString: String): File = withContext(Dispatchers.IO) {
         val uri = Uri.parse(uriString)
@@ -90,6 +124,10 @@ class LLMEngine(private val context: Context) {
                 throw IllegalArgumentException("Invalid model format. Must be .task or .litertlm file")
             }
 
+            // Detect model format
+            modelFormat = detectModelFormat(modelFile)
+            Log.d(TAG, "Detected model format: $modelFormat")
+
             // Check available memory
             val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
             val memInfo = android.app.ActivityManager.MemoryInfo()
@@ -102,10 +140,18 @@ class LLMEngine(private val context: Context) {
                 throw IllegalStateException("Insufficient memory. Model: ${fileSizeMB}MB, Available: ${availableMB}MB. Close other apps.")
             }
 
-            Log.d(TAG, "Creating LlmInference with model metadata config...")
+            // Handle RTLM format - Currently MediaPipe 0.10.27 doesn't support it
+            // The LiteRT GenAI SDK is needed but may not be available yet on Maven
+            if (modelFormat == ModelFormat.LITERT) {
+                Log.w(TAG, "RTLM format detected. Attempting to load with MediaPipe (may fail)...")
+                Log.w(TAG, "Note: RTLM format requires LiteRT GenAI SDK. If load fails, use .task files instead.")
+            }
+
+            Log.d(TAG, "Creating LlmInference with model...")
 
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(actualPath)
+                .setMaxTokens(1024)
                 .build()
 
             llmInference?.close()
@@ -134,7 +180,17 @@ class LLMEngine(private val context: Context) {
                 isLoaded = false
                 llmInference = null
                 Log.e(TAG, "Runtime error loading model", e)
-                Result.failure(Exception("Load failed: ${e.message ?: "Unknown error"}"))
+
+                // Check if it's the RTLM format error
+                val message = e.message ?: ""
+                if (message.contains("RTLM") || message.contains("TFL3")) {
+                    Result.failure(Exception(
+                        "Model format not supported. The .litertlm (RTLM) format requires LiteRT GenAI SDK. " +
+                        "Please use .task files instead, or wait for LiteRT GenAI SDK support."
+                    ))
+                } else {
+                    Result.failure(Exception("Load failed: ${e.message ?: "Unknown error"}"))
+                }
             } catch (e: Error) {
                 isLoaded = false
                 llmInference = null
@@ -169,29 +225,36 @@ class LLMEngine(private val context: Context) {
         try {
             val inference = llmInference ?: throw IllegalStateException("Model unloaded during generation")
 
-            inference.generateResponseAsync(prompt)?.let { result ->
-                val currentTime = System.currentTimeMillis()
+            // Use streaming generation
+            inference.generateResponseAsync(prompt).let { future ->
+                try {
+                    // For streaming, we use the result listener pattern
+                    val result = future.get() // This blocks but we're on IO dispatcher
 
-                if (tokenCount == 0) {
-                    firstTokenTime = currentTime - startTime
+                    val currentTime = System.currentTimeMillis()
+                    if (tokenCount == 0) {
+                        firstTokenTime = currentTime - startTime
+                    }
+                    tokenCount++
+                    fullResponse.append(result)
+
+                    val totalTime = currentTime - startTime
+                    val tokensPerSecond = if (totalTime > 0) {
+                        (tokenCount * 1000f) / totalTime
+                    } else 0f
+
+                    val metrics = GenerationMetrics(
+                        ttft = firstTokenTime,
+                        tokensGenerated = tokenCount,
+                        totalTime = totalTime,
+                        tokensPerSecond = tokensPerSecond
+                    )
+
+                    trySend(Pair(result, metrics))
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error getting async result", e)
+                    throw e
                 }
-
-                tokenCount++
-                fullResponse.append(result as String)
-
-                val totalTime = currentTime - startTime
-                val tokensPerSecond = if (totalTime > 0) {
-                    (tokenCount * 1000f) / totalTime
-                } else 0f
-
-                val metrics = GenerationMetrics(
-                    ttft = firstTokenTime,
-                    tokensGenerated = tokenCount,
-                    totalTime = totalTime,
-                    tokensPerSecond = tokensPerSecond
-                )
-
-                trySend(Pair(result, metrics))
             }
 
             Log.d(TAG, "Generation complete. Tokens: $tokenCount")
@@ -224,6 +287,7 @@ class LLMEngine(private val context: Context) {
             llmInference?.close()
             llmInference = null
             isLoaded = false
+            modelFormat = ModelFormat.UNKNOWN
             Log.d(TAG, "Model unloaded")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to unload model", e)
@@ -231,6 +295,8 @@ class LLMEngine(private val context: Context) {
     }
 
     fun isModelLoaded(): Boolean = isLoaded
+
+    fun getModelFormat(): ModelFormat = modelFormat
 
     companion object {
         private const val TAG = "LLMEngine"

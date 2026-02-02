@@ -5,9 +5,18 @@
 
 ## PROJECT STATUS
 
-**Current Phase:** Phase 6 (Polish) - In Progress
+**Current Phase:** Phase 6 (Polish) - PENDING TESTING
 **Completed:** Phases 0-5 ✓
-**Next:** Settings, error handling, optimizations
+**Next:** Test with .task model files, then settings/error handling
+
+### ⚠️ KNOWN ISSUE: RTLM Format Not Supported
+
+MediaPipe tasks-genai (0.10.27) does NOT support `.litertlm` (RTLM format) files.
+- Error: `Model provided has model identifier 'RTLM', should be 'TFL3'`
+- **Solution:** Use `.task` files instead of `.litertlm` files
+- LiteRT GenAI SDK (which supports RTLM) is not yet publicly available on Maven
+
+**Compatible Models:** Must use `.task` format from HuggingFace litert-community
 
 ---
 
@@ -44,11 +53,14 @@
 4. **Qwen Models** (Alibaba)
    - Qwen2-0.5B/1.5B variants
 
-All models must be in `.task` or `.litertlm` format from HuggingFace LiteRT Community.
+⚠️ **IMPORTANT:** Models MUST be in `.task` format. The `.litertlm` (RTLM) format is NOT supported by MediaPipe.
 
-**Download Links:**
-- Gemma3-1B (SD8G3): https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_q4_ekv1280_sm8750.litertlm
+**Working Download Links (.task format only):**
+- Gemma3-1B-IT (555MB): https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task
+- Gemma3-1B-IT q8 (1GB): https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q8_ekv2048.task
 - SmolLM-135M: https://huggingface.co/litert-community/SmolLM-135M-Instruct/resolve/main/SmolLM-135M-Instruct_multi-prefill-seq_q8_ekv1280.task
+
+**DO NOT USE:** `.litertlm` files (RTLM format not supported)
 
 ---
 
@@ -223,12 +235,19 @@ ginference/
 - Input disabled until model loaded (red border warning)
 - Model name displayed in header when loaded
 
-### PHASE 6: Polish (Step 6.1 - 6.3) - IN PROGRESS
+### PHASE 6: Polish (Step 6.1 - 6.3) - PENDING TESTING
+- [ ] 6.0: **TEST WITH .task MODEL FILE** ⚠️ BLOCKED - Need to test with proper format
 - [ ] 6.1: Add settings (temperature, top_k, max_tokens)
 - [ ] 6.2: Error handling improvements
 - [ ] 6.3: Performance optimizations
 **Checkpoint:** Production-ready v1
-**Status:** Current work in progress
+**Status:** PENDING - Need to test model loading with .task file (not .litertlm)
+
+**Latest Changes (2024-02-02):**
+- Updated MediaPipe to 0.10.27
+- Added RTLM format detection with clear error message
+- Documented that .litertlm files are NOT supported
+- User must download .task files from HuggingFace
 
 ---
 
@@ -476,12 +495,20 @@ e8fb2c8 - Phase 0 Complete: Project setup, dependencies, cyberpunk theme
 
 ## NEXT STEPS
 
-1. **User provides model location on phone**
-2. **Deploy current build and test folder picker**
-3. **Verify model shows up in selector**
-4. **Test model loading and generation**
+1. **Download a .task model file** (NOT .litertlm)
+   - Recommended: `gemma3-1b-it-int4.task` (555MB)
+   - From: https://huggingface.co/litert-community/Gemma3-1B-IT
+   - Requires accepting Gemma license on HuggingFace
+2. **Push model to device:** `adb push gemma3-1b-it-int4.task /sdcard/llms/`
+3. **Deploy app and test folder picker**
+4. **Verify model loads and generates text**
 5. **Complete Phase 6 (settings, error handling)**
 6. **Final commit for v1.0**
+
+## GITHUB REPOSITORY
+
+**Repository:** https://github.com/anthropics/ginference (TO BE CREATED)
+**Releases:** APK available in GitHub Releases
 
 ---
 

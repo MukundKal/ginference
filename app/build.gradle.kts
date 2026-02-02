@@ -56,8 +56,9 @@ android {
 }
 
 dependencies {
-    // MediaPipe LLM Inference
-    implementation("com.google.mediapipe:tasks-genai:0.10.18")
+    // MediaPipe LLM Inference - supports .task files (TFL3 format)
+    // Note: .litertlm (RTLM) format requires LiteRT GenAI SDK which is not yet public
+    implementation("com.google.mediapipe:tasks-genai:0.10.27")
 
     // Compose
     implementation("androidx.core:core-ktx:1.12.0")
