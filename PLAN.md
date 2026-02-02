@@ -153,12 +153,13 @@ ginference/
 **Checkpoint:** All metrics readable in logcat
 **Git Commit:** `6013406` - Phase 2 Complete
 
-### PHASE 3: Basic UI (Step 3.1 - 3.4)
-- [ ] 3.1: Create `InferenceScreen.kt` main layout
-- [ ] 3.2: Implement `PromptInput.kt` (terminal-style input)
-- [ ] 3.3: Implement `OutputDisplay.kt` (streaming text)
-- [ ] 3.4: Connect ViewModel to UI
+### PHASE 3: Basic UI (Step 3.1 - 3.4) ✓ COMPLETE
+- [x] 3.1: Create `InferenceScreen.kt` main layout
+- [x] 3.2: Implement `PromptInput.kt` (terminal-style input)
+- [x] 3.3: Implement `OutputDisplay.kt` (streaming text)
+- [x] 3.4: Connect ViewModel to UI
 **Checkpoint:** Can type prompt and see generated output
+**Git Commit:** `32aad10` - Phase 3 Complete
 
 ### PHASE 4: Metrics UI (Step 4.1 - 4.3)
 - [ ] 4.1: Implement `MetricsPanel.kt` (ASCII-style readouts)
