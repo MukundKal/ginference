@@ -9,14 +9,7 @@ import com.ginference.inference.ModelInfo
 import com.ginference.inference.ModelManager
 import com.ginference.metrics.InferenceMetrics
 import com.ginference.metrics.SystemMetrics
-import com.ginference.ui.components.ModelState
 import com.ginference.ui.screens.Message
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.io.File
-import java.io.FileOutputStream
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,8 +33,12 @@ data class InferenceState(
     val gpuUsage: Float = 0f,
     val temperature: Float = 0f,
     val showModelSelector: Boolean = false,
-    val availableModels: List<ModelState> = emptyList(),
-    val currentModelId: String? = null
+    val availableModels: List<ModelInfo> = emptyList(),
+    val currentModelId: String? = null,
+    val storagePath: String = "",
+    val cacheSize: String = "0B",
+    val freeSpace: String = "0GB",
+    val isFolderSet: Boolean = false
 )
 
 class InferenceViewModel(application: Application) : AndroidViewModel(application) {
@@ -50,7 +47,6 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
     private val modelManager = ModelManager(application)
     private val systemMetrics = SystemMetrics(application)
     private val inferenceMetrics = InferenceMetrics()
-    private val okHttpClient = OkHttpClient()
 
     private val _state = MutableStateFlow(InferenceState())
     val state: StateFlow<InferenceState> = _state.asStateFlow()
@@ -61,22 +57,47 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
     init {
         Log.d(TAG, "InferenceViewModel initialized")
         startMetricsCollection()
+        checkFolderSetup()
+    }
+
+    private fun checkFolderSetup() {
+        val isFolderSet = modelManager.hasModelFolder()
+        _state.value = _state.value.copy(isFolderSet = isFolderSet)
+        if (isFolderSet) {
+            loadAvailableModels()
+        }
+    }
+
+    fun hasModelFolder(): Boolean {
+        return modelManager.hasModelFolder()
+    }
+
+    fun getModelFolderPath(): String {
+        return modelManager.getModelFolderPath()
+    }
+
+    fun setModelFolder(uri: android.net.Uri) {
+        modelManager.saveModelFolderUri(uri)
+        _state.value = _state.value.copy(isFolderSet = true)
         loadAvailableModels()
+        Log.d(TAG, "Model folder set: $uri")
     }
 
     private fun loadAvailableModels() {
         viewModelScope.launch {
-            val models = modelManager.getAllModels()
-            val modelStates = models.map { model ->
-                ModelState(
-                    model = model,
-                    isDownloaded = modelManager.isModelDownloaded(model),
-                    isDownloading = false,
-                    downloadProgress = 0f,
-                    isSelected = false
-                )
-            }
-            _state.value = _state.value.copy(availableModels = modelStates)
+            val models = modelManager.scanModels()
+            val cacheSize = modelManager.getTotalCacheSize()
+            val freeSpace = modelManager.getAvailableSpace()
+            val storagePath = modelManager.getModelFolderPath()
+
+            Log.d(TAG, "Found ${models.size} models in $storagePath")
+
+            _state.value = _state.value.copy(
+                availableModels = models,
+                storagePath = storagePath,
+                cacheSize = modelManager.formatSize(cacheSize),
+                freeSpace = modelManager.formatSize(freeSpace)
+            )
         }
     }
 
@@ -89,84 +110,13 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun selectModel(model: ModelInfo) {
-        if (!modelManager.isModelDownloaded(model)) {
-            Log.w(TAG, "Model not downloaded: ${model.name}")
-            return
-        }
-
         hideModelSelector()
-        loadModel(modelManager.getModelPath(model), model.name)
+        loadModel(model.uri.toString(), model.name)
         _state.value = _state.value.copy(currentModelId = model.id)
-        updateModelStates()
     }
 
-    fun downloadModel(model: ModelInfo) {
-        viewModelScope.launch {
-            try {
-                Log.d(TAG, "Starting download: ${model.name}")
-                updateModelDownloadState(model.id, isDownloading = true, progress = 0f)
-
-                val outputFile = modelManager.getModelFile(model)
-                val request = Request.Builder().url(model.url).build()
-
-                withContext(Dispatchers.IO) {
-                    val response = okHttpClient.newCall(request).execute()
-                    if (!response.isSuccessful) {
-                        throw Exception("Download failed: ${response.code}")
-                    }
-
-                    val body = response.body ?: throw Exception("Empty response body")
-                    val contentLength = body.contentLength()
-                    val inputStream = body.byteStream()
-                    val outputStream = FileOutputStream(outputFile)
-
-                    val buffer = ByteArray(8192)
-                    var bytesRead: Int
-                    var totalBytes = 0L
-
-                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                        outputStream.write(buffer, 0, bytesRead)
-                        totalBytes += bytesRead
-
-                        if (contentLength > 0) {
-                            val progress = totalBytes.toFloat() / contentLength.toFloat()
-                            updateModelDownloadState(model.id, isDownloading = true, progress = progress)
-                        }
-                    }
-
-                    outputStream.close()
-                    inputStream.close()
-                }
-
-                Log.d(TAG, "Download complete: ${model.name}")
-                updateModelDownloadState(model.id, isDownloading = false, progress = 1f)
-                loadAvailableModels()
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Download failed: ${model.name}", e)
-                updateModelDownloadState(model.id, isDownloading = false, progress = 0f)
-                _state.value = _state.value.copy(error = "Download failed: ${e.message}")
-            }
-        }
-    }
-
-    private fun updateModelDownloadState(modelId: String, isDownloading: Boolean, progress: Float) {
-        val updatedModels = _state.value.availableModels.map { modelState ->
-            if (modelState.model.id == modelId) {
-                modelState.copy(isDownloading = isDownloading, downloadProgress = progress)
-            } else {
-                modelState
-            }
-        }
-        _state.value = _state.value.copy(availableModels = updatedModels)
-    }
-
-    private fun updateModelStates() {
-        val currentId = _state.value.currentModelId
-        val updatedModels = _state.value.availableModels.map { modelState ->
-            modelState.copy(isSelected = modelState.model.id == currentId)
-        }
-        _state.value = _state.value.copy(availableModels = updatedModels)
+    fun refreshModels() {
+        loadAvailableModels()
     }
 
     fun sendPrompt(prompt: String) {

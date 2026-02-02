@@ -1,116 +1,95 @@
 package com.ginference.inference
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
-import java.io.File
+import androidx.documentfile.provider.DocumentFile
 
-sealed class ModelInfo(
+data class ModelInfo(
     val id: String,
     val name: String,
-    val size: Long,
     val fileName: String,
-    val url: String
-) {
-    object Gemma3_1B : ModelInfo(
-        id = "gemma_3_1b",
-        name = "Gemma 3 1B",
-        size = 1_073_741_824L,
-        fileName = "gemma-3-1b-it-gpu-int4.bin",
-        url = "https://huggingface.co/google/gemma-3-1b-it/resolve/main/gemma-3-1b-it-gpu-int4.bin"
-    )
-
-    object Gemma2_2B : ModelInfo(
-        id = "gemma_2_2b",
-        name = "Gemma 2 2B",
-        size = 2_147_483_648L,
-        fileName = "gemma-2-2b-it-gpu-int4.bin",
-        url = "https://huggingface.co/google/gemma-2-2b-it/resolve/main/gemma-2-2b-it-gpu-int4.bin"
-    )
-
-    object Phi2 : ModelInfo(
-        id = "phi_2",
-        name = "Phi-2",
-        size = 2_684_354_560L,
-        fileName = "phi-2-cpu-int4.bin",
-        url = "https://huggingface.co/microsoft/phi-2/resolve/main/phi-2-cpu-int4.bin"
-    )
-
-    object SmolLM_1_7B : ModelInfo(
-        id = "smollm_1_7b",
-        name = "SmolLM 1.7B",
-        size = 1_717_986_918L,
-        fileName = "smollm-1.7b-instruct-gpu-int4.bin",
-        url = "https://huggingface.co/HuggingFaceTB/SmolLM-1.7B-Instruct/resolve/main/smollm-1.7b-instruct-gpu-int4.bin"
-    )
-}
+    val size: Long,
+    val uri: Uri
+)
 
 class ModelManager(private val context: Context) {
 
-    private val modelDir: File
-        get() = File(context.cacheDir, "models").apply {
-            if (!exists()) mkdirs()
+    private val prefs = context.getSharedPreferences("ginference_prefs", Context.MODE_PRIVATE)
+
+    fun saveModelFolderUri(uri: Uri) {
+        context.contentResolver.takePersistableUriPermission(
+            uri,
+            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        )
+        prefs.edit().putString(KEY_MODEL_FOLDER_URI, uri.toString()).apply()
+        Log.d(TAG, "Saved model folder URI: $uri")
+    }
+
+    fun getModelFolderUri(): Uri? {
+        val uriString = prefs.getString(KEY_MODEL_FOLDER_URI, null) ?: return null
+        return Uri.parse(uriString)
+    }
+
+    fun hasModelFolder(): Boolean {
+        return getModelFolderUri() != null
+    }
+
+    fun getModelFolderPath(): String {
+        val uri = getModelFolderUri() ?: return "Not set"
+        return uri.path?.substringAfter("primary:") ?: uri.toString()
+    }
+
+    fun scanModels(): List<ModelInfo> {
+        val folderUri = getModelFolderUri() ?: return emptyList()
+
+        val folder = DocumentFile.fromTreeUri(context, folderUri) ?: return emptyList()
+
+        if (!folder.exists() || !folder.isDirectory) {
+            Log.w(TAG, "Model folder does not exist or is not a directory")
+            return emptyList()
         }
 
-    fun getModelPath(model: ModelInfo): String {
-        return File(modelDir, model.fileName).absolutePath
+        val modelFiles = folder.listFiles().filter { file ->
+            file.isFile && (file.name?.endsWith(".task") == true || file.name?.endsWith(".litertlm") == true)
+        }
+
+        Log.d(TAG, "Scanned ${modelFiles.size} models in ${folder.uri}")
+
+        return modelFiles.mapNotNull { file ->
+            val name = file.name ?: return@mapNotNull null
+            ModelInfo(
+                id = name.substringBeforeLast("."),
+                name = name.substringBeforeLast(".")
+                    .replace("-", " ")
+                    .replace("_", " "),
+                fileName = name,
+                size = file.length(),
+                uri = file.uri
+            )
+        }.sortedBy { it.name }
     }
 
-    fun isModelDownloaded(model: ModelInfo): Boolean {
-        val file = File(modelDir, model.fileName)
-        return file.exists() && file.length() > 0
-    }
-
-    fun getModelFile(model: ModelInfo): File {
-        return File(modelDir, model.fileName)
-    }
-
-    fun getDownloadedModels(): List<ModelInfo> {
-        return getAllModels().filter { isModelDownloaded(it) }
-    }
-
-    fun getAllModels(): List<ModelInfo> {
-        return listOf(
-            ModelInfo.Gemma3_1B,
-            ModelInfo.Gemma2_2B,
-            ModelInfo.Phi2,
-            ModelInfo.SmolLM_1_7B
-        )
-    }
-
-    fun getModelById(id: String): ModelInfo? {
-        return getAllModels().find { it.id == id }
+    fun getModelByUri(uri: Uri): ModelInfo? {
+        return scanModels().find { it.uri == uri }
     }
 
     fun deleteModel(model: ModelInfo): Boolean {
         return try {
-            val file = getModelFile(model)
-            if (file.exists()) {
-                val deleted = file.delete()
-                Log.d(TAG, "Deleted model ${model.name}: $deleted")
-                deleted
-            } else {
-                Log.w(TAG, "Model ${model.name} not found")
-                false
-            }
+            val file = DocumentFile.fromSingleUri(context, model.uri)
+            val deleted = file?.delete() ?: false
+            Log.d(TAG, "Deleted model ${model.name}: $deleted")
+            deleted
         } catch (e: Exception) {
             Log.e(TAG, "Failed to delete model ${model.name}", e)
             false
         }
     }
 
-    fun deleteAllModels(): Boolean {
-        return try {
-            getAllModels().forEach { deleteModel(it) }
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to delete all models", e)
-            false
-        }
-    }
-
     fun getTotalCacheSize(): Long {
         return try {
-            modelDir.listFiles()?.sumOf { it.length() } ?: 0L
+            scanModels().sumOf { it.size }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to calculate cache size", e)
             0L
@@ -119,7 +98,11 @@ class ModelManager(private val context: Context) {
 
     fun getAvailableSpace(): Long {
         return try {
-            modelDir.usableSpace
+            val folderUri = getModelFolderUri() ?: return 0L
+            val folder = DocumentFile.fromTreeUri(context, folderUri) ?: return 0L
+            context.contentResolver.openFileDescriptor(folder.uri, "r")?.use {
+                android.os.StatFs("/data").availableBytes
+            } ?: 0L
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get available space", e)
             0L
@@ -128,14 +111,20 @@ class ModelManager(private val context: Context) {
 
     fun formatSize(bytes: Long): String {
         return when {
-            bytes < 1024 -> "$bytes B"
-            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-            bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
-            else -> String.format("%.2f GB", bytes / (1024f * 1024f * 1024f))
+            bytes < 1024 -> "${bytes}B"
+            bytes < 1024 * 1024 -> "${bytes / 1024}KB"
+            bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)}MB"
+            else -> String.format("%.2fGB", bytes / (1024f * 1024f * 1024f))
         }
+    }
+
+    fun clearModelFolder() {
+        prefs.edit().remove(KEY_MODEL_FOLDER_URI).apply()
+        Log.d(TAG, "Model folder URI cleared")
     }
 
     companion object {
         private const val TAG = "ModelManager"
+        private const val KEY_MODEL_FOLDER_URI = "model_folder_uri"
     }
 }

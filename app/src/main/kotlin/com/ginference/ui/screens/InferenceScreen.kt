@@ -17,7 +17,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.ginference.inference.ModelInfo
 import com.ginference.ui.components.ModelSelectorDialog
-import com.ginference.ui.components.ModelState
 import com.ginference.ui.theme.*
 import kotlinx.coroutines.delay
 
@@ -32,6 +31,8 @@ fun InferenceScreen(
     messages: List<Message>,
     currentOutput: String,
     isGenerating: Boolean,
+    isModelLoaded: Boolean,
+    modelName: String,
     onSendPrompt: (String) -> Unit,
     onStopGeneration: () -> Unit,
     ttft: Long,
@@ -42,11 +43,13 @@ fun InferenceScreen(
     gpuUsage: Float,
     temperature: Float,
     showModelSelector: Boolean,
-    availableModels: List<ModelState>,
+    availableModels: List<ModelInfo>,
     onShowModelSelector: () -> Unit,
     onHideModelSelector: () -> Unit,
     onModelSelect: (ModelInfo) -> Unit,
-    onModelDownload: (ModelInfo) -> Unit,
+    storagePath: String,
+    cacheSize: String,
+    freeSpace: String,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -59,6 +62,8 @@ fun InferenceScreen(
         ) {
             Header(
                 isGenerating = isGenerating,
+                modelName = modelName,
+                isModelLoaded = isModelLoaded,
                 onShowModelSelector = onShowModelSelector,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -96,6 +101,7 @@ fun InferenceScreen(
                 onSendPrompt = onSendPrompt,
                 onStopGeneration = onStopGeneration,
                 isGenerating = isGenerating,
+                isModelLoaded = isModelLoaded,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(12.dp)
@@ -105,9 +111,12 @@ fun InferenceScreen(
         if (showModelSelector) {
             ModelSelectorDialog(
                 models = availableModels,
+                selectedModelId = null,
                 onModelSelect = onModelSelect,
-                onModelDownload = onModelDownload,
-                onDismiss = onHideModelSelector
+                onDismiss = onHideModelSelector,
+                storagePath = storagePath,
+                cacheSize = cacheSize,
+                freeSpace = freeSpace
             )
         }
     }
@@ -116,6 +125,8 @@ fun InferenceScreen(
 @Composable
 private fun Header(
     isGenerating: Boolean,
+    modelName: String,
+    isModelLoaded: Boolean,
     onShowModelSelector: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -124,11 +135,20 @@ private fun Header(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = "GINFERENCE",
-            color = MatrixGreen,
-            style = CyberpunkTypography.terminalLarge
-        )
+        Column {
+            Text(
+                text = "GINFERENCE",
+                color = MatrixGreen,
+                style = CyberpunkTypography.terminalLarge
+            )
+            if (isModelLoaded) {
+                Text(
+                    text = modelName,
+                    color = CyanNeon.copy(alpha = 0.7f),
+                    style = CyberpunkTypography.metric
+                )
+            }
+        }
         Row(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -293,6 +313,7 @@ private fun InputArea(
     onSendPrompt: (String) -> Unit,
     onStopGeneration: () -> Unit,
     isGenerating: Boolean,
+    isModelLoaded: Boolean,
     modifier: Modifier = Modifier
 ) {
     var inputText by remember { mutableStateOf("") }
@@ -306,19 +327,28 @@ private fun InputArea(
         androidx.compose.foundation.text.BasicTextField(
             value = inputText,
             onValueChange = { inputText = it },
-            enabled = !isGenerating,
-            textStyle = CyberpunkTypography.terminal.copy(color = MatrixGreen),
+            enabled = !isGenerating && isModelLoaded,
+            textStyle = CyberpunkTypography.terminal.copy(
+                color = if (isModelLoaded) MatrixGreen else MatrixGreen.copy(alpha = 0.3f)
+            ),
             modifier = Modifier
                 .weight(1f)
                 .background(CyberpunkBackground)
-                .border(1.dp, if (isGenerating) MatrixGreen.copy(alpha = 0.3f) else MatrixGreen)
+                .border(
+                    1.dp,
+                    when {
+                        !isModelLoaded -> NeonRed.copy(alpha = 0.5f)
+                        isGenerating -> MatrixGreen.copy(alpha = 0.3f)
+                        else -> MatrixGreen
+                    }
+                )
                 .padding(12.dp),
             decorationBox = { innerTextField ->
                 Box {
-                    if (inputText.isEmpty() && !isGenerating) {
+                    if (inputText.isEmpty()) {
                         Text(
-                            text = "ENTER PROMPT_",
-                            color = MatrixGreen.copy(alpha = 0.5f),
+                            text = if (!isModelLoaded) "LOAD MODEL FIRST_" else "ENTER PROMPT_",
+                            color = if (!isModelLoaded) NeonRed.copy(alpha = 0.7f) else MatrixGreen.copy(alpha = 0.5f),
                             style = CyberpunkTypography.terminal
                         )
                     }
@@ -329,7 +359,7 @@ private fun InputArea(
 
         ActionButton(
             text = if (isGenerating) "ABORT" else "EXECUTE",
-            enabled = if (isGenerating) true else inputText.isNotBlank(),
+            enabled = if (isGenerating) true else (inputText.isNotBlank() && isModelLoaded),
             onClick = {
                 if (isGenerating) {
                     onStopGeneration()
